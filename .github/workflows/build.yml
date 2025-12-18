@@ -1,20 +1,21 @@
-name: Build Donation Media Hub
+name: Build & Release Donation Media Hub
 
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: write   # 🔴 ОБЯЗАТЕЛЬНО для загрузки в Release
+
 jobs:
   build-macos:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -23,24 +24,26 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build macOS app
+      - name: Build macOS
         run: pyinstaller donation_media_hub.spec
 
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+      - name: Zip macOS app
+        run: |
+          cd dist
+          zip -r DonationMediaHub-mac.zip DonationMediaHub.app
+
+      - name: Upload macOS to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: DonationMediaHub-mac
-          path: dist/*
+          files: dist/DonationMediaHub-mac.zip
 
   build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -49,11 +52,15 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Windows exe
+      - name: Build Windows
         run: pyinstaller donation_media_hub.spec
 
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+      - name: Zip Windows exe
+        run: |
+          cd dist
+          powershell Compress-Archive DonationMediaHub.exe DonationMediaHub-win.zip
+
+      - name: Upload Windows to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: DonationMediaHub-win
-          path: dist/*
+          files: dist/DonationMediaHub-win.zip
