@@ -27,15 +27,10 @@ jobs:
       - name: Build macOS
         run: pyinstaller donation_media_hub.spec
 
-      - name: Zip macOS pkg
-        run: |
-          cd dist
-          zip -r DonationMediaHub-mac.zip DonationMediaHub.pkg
-
       - name: Upload macOS to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/DonationMediaHub-mac.zip
+          files: dist/DonationMediaHub.pkg
 
   build-windows:
     runs-on: windows-latest
@@ -55,12 +50,7 @@ jobs:
       - name: Build Windows
         run: pyinstaller donation_media_hub.spec
 
-      - name: Zip Windows exe
-        run: |
-          cd dist
-          powershell Compress-Archive DonationMediaHub.exe DonationMediaHub-win.zip
-
       - name: Upload Windows to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/DonationMediaHub-win.zip
+          files: dist/DonationMediaHub.exe
