@@ -5,7 +5,6 @@ import shutil
 import threading
 import time
 import webbrowser
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -27,8 +26,6 @@ from donation_media_hub.ui.theme import DarkTheme
 class MainWindow(tk.Tk):
     """
     Vertical player UI + event-driven logic.
-
-    UI emits user actions -> controller methods.
     Background work (polling / downloading) emits events -> UI thread handles.
     """
 
@@ -48,6 +45,9 @@ class MainWindow(tk.Tk):
 
         self.ui_events: "thread_queue.Queue[dict]" = thread_queue.Queue()
         self._closing = False
+
+        # anti-race: protects watchdog from firing instantly after play()
+        self._last_play_start_ts: float = 0.0
 
         self._load_config()
         self._load_states()
@@ -120,7 +120,6 @@ class MainWindow(tk.Tk):
     # -------------------- UI --------------------
     def _build_ui(self) -> None:
         self.title(APP_TITLE)
-        # Вертикальный прямоугольник
         self.geometry("520x860")
         self.minsize(480, 780)
 
@@ -129,7 +128,6 @@ class MainWindow(tk.Tk):
         root = ttk.Frame(self, padding=12)
         root.pack(fill="both", expand=True)
 
-        # Header / Now playing
         header = ttk.Frame(root, style="Card.TFrame", padding=14)
         header.pack(fill="x")
 
@@ -139,7 +137,6 @@ class MainWindow(tk.Tk):
         ttk.Label(header, textvariable=self.now_big_var, style="Title.TLabel").pack(anchor="w", pady=(6, 0))
         ttk.Label(header, textvariable=self.now_small_var, style="Small.TLabel").pack(anchor="w", pady=(4, 0))
 
-        # Controls
         controls = ttk.Frame(root, style="Card.TFrame", padding=12)
         controls.pack(fill="x", pady=(10, 0))
 
@@ -148,7 +145,12 @@ class MainWindow(tk.Tk):
 
         ttk.Button(row1, text="⏮", width=4, command=self.go_start).pack(side="left", padx=(0, 6))
         ttk.Button(row1, text="Prev", command=self.prev_track).pack(side="left", padx=(0, 6))
-        ttk.Button(row1, text="Play/Pause", style="Accent.TButton", command=self.play_pause).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ttk.Button(
+            row1,
+            text="Play/Pause",
+            style="Accent.TButton",
+            command=self.play_pause,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
         ttk.Button(row1, text="Next", command=self.next_track).pack(side="left", padx=(0, 6))
         ttk.Button(row1, text="Skip", command=self.skip_track).pack(side="left")
 
@@ -162,7 +164,6 @@ class MainWindow(tk.Tk):
         vol = ttk.Scale(row2, from_=0.0, to=1.0, variable=self.volume_var, command=self._on_volume, length=180)
         vol.pack(side="left")
 
-        # Queue
         queue_card = ttk.Frame(root, style="Card.TFrame", padding=12)
         queue_card.pack(fill="both", expand=True, pady=(10, 0))
 
@@ -191,7 +192,6 @@ class MainWindow(tk.Tk):
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Double-1>", self._on_open_link)
 
-        # Settings (compact bottom panel)
         settings = ttk.Frame(root, style="Card.TFrame", padding=12)
         settings.pack(fill="x", pady=(10, 0))
 
@@ -215,7 +215,9 @@ class MainWindow(tk.Tk):
         r3.pack(fill="x", pady=(10, 0))
 
         ttk.Checkbutton(r3, text="Show tokens", variable=self.show_tokens_var, command=self._toggle_tokens).pack(side="left")
-        ttk.Checkbutton(r3, text="Download & Play (mp3)", variable=self.download_mode_var, command=self._save_config).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(r3, text="Download & Play (mp3)", variable=self.download_mode_var, command=self._save_config).pack(
+            side="left", padx=(12, 0)
+        )
 
         r4 = ttk.Frame(settings)
         r4.pack(fill="x", pady=(10, 0))
@@ -223,7 +225,6 @@ class MainWindow(tk.Tk):
         ttk.Button(r4, text="Stop", command=self.stop).pack(side="left", fill="x", expand=True, padx=(0, 6))
         ttk.Button(r4, text="Temp", command=self.clear_temp).pack(side="left", fill="x", expand=True)
 
-        # Log
         log = ttk.Frame(root, style="Card2.TFrame", padding=10)
         log.pack(fill="x", pady=(10, 0))
         ttk.Label(log, text="Log", style="Muted.TLabel").pack(anchor="w")
@@ -266,7 +267,6 @@ class MainWindow(tk.Tk):
             messagebox.showerror("Ошибка", "Вставь хотя бы один токен (DA или DX).", parent=self)
             return
 
-        # refresh clients tokens immediately
         self.pollers.da_client.token = da
         self.pollers.dx_client.token = dx
 
@@ -275,8 +275,7 @@ class MainWindow(tk.Tk):
         self._log("▶ polling started")
         self._save_config()
 
-        # autoplay if have queue
-        if self.queue.current() and (not self.download_mode_var.get()):
+        if self.queue.current() and (not self.player.is_playing()) and (not self.player.is_paused()):
             self.play_current(force=True)
 
     def stop(self) -> None:
@@ -315,7 +314,6 @@ class MainWindow(tk.Tk):
         for idx, t in enumerate(self.queue.tracks, start=1):
             self.tree.insert("", "end", iid=t.track_id, values=(idx, t.title, t.status))
 
-        # keep selection
         if self.queue.current_track_id and self.queue.get(self.queue.current_track_id):
             try:
                 self.tree.selection_set(self.queue.current_track_id)
@@ -351,11 +349,15 @@ class MainWindow(tk.Tk):
                 elif et == "new_track":
                     try:
                         t = Track(**ev["track"])
+                        before_len = len(self.queue.tracks)
                         if self.queue.append_if_new(t):
                             self._log(f"➕ NEW [{t.source}] {t.title}")
                             self.status_var.set(f"Queue: {len(self.queue.tracks)}")
 
-                            if not self.download_mode_var.get() and not self.player.is_playing():
+                            if before_len == 0 and self.queue.current_track_id is None:
+                                self.queue.set_current(t.track_id)
+
+                            if not self.player.is_playing() and not self.player.is_paused():
                                 self.play_current(force=True)
 
                             self.queue.save()
@@ -368,7 +370,10 @@ class MainWindow(tk.Tk):
                     tid = ev.get("track_id")
                     t = self.queue.get(tid) if tid else None
                     if t:
-                        t.status = ev.get("status", t.status) or t.status
+                        st = ev.get("status", t.status) or t.status
+                        if st == "ready":
+                            st = "queued"
+                        t.status = st
                         if ev.get("error"):
                             t.error = str(ev["error"])
                         self.queue.save()
@@ -381,10 +386,15 @@ class MainWindow(tk.Tk):
                     if t:
                         t.local_path = str(path)
                         if t.status not in {"playing", "paused"}:
-                            t.status = "ready"
+                            t.status = "queued"
                         self.queue.save()
-                        # auto start if it's current and nothing is playing
-                        if t.track_id == self.queue.current_track_id and self.download_mode_var.get() and not self.player.is_playing():
+
+                        if (
+                            t.track_id == self.queue.current_track_id
+                            and self.download_mode_var.get()
+                            and not self.player.is_playing()
+                            and not self.player.is_paused()
+                        ):
                             self.play_current(force=True)
 
         except thread_queue.Empty:
@@ -418,12 +428,11 @@ class MainWindow(tk.Tk):
                     continue
                 if t.status in {"downloading", "playing", "paused"}:
                     continue
-                # download
+
                 self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "downloading"})
                 try:
                     out = self.downloader.download_mp3(t)
                     self.ui_events.put({"type": "download_done", "track_id": t.track_id, "path": str(out)})
-                    self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "ready"})
                     self.ui_events.put({"type": "log", "msg": f"✅ downloaded: {out.name}"})
                 except Exception as e:
                     self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "failed", "error": str(e)})
@@ -435,7 +444,6 @@ class MainWindow(tk.Tk):
         if not t:
             return
 
-        # browser mode
         if not self.download_mode_var.get():
             webbrowser.open(t.url)
             self._log(f"🌐 opened: {t.title}")
@@ -451,10 +459,17 @@ class MainWindow(tk.Tk):
         if not t.local_path or not Path(t.local_path).exists():
             if force:
                 self._log(f"⏳ waiting download: {t.title}")
+                self.status_var.set("Waiting download…")
             t.status = "queued"
             self.queue.save()
             self._update_now_playing()
             return
+
+        t.status = "playing"
+        self.queue.save()
+        self._update_now_playing()
+        self.status_var.set("Starting…")
+        self._last_play_start_ts = time.time()
 
         try:
             self.player.play(t.local_path, volume=float(self.volume_var.get()))
@@ -468,6 +483,7 @@ class MainWindow(tk.Tk):
             t.error = str(e)
             self.queue.save()
             self._log(f"❌ play error: {e}")
+            self.status_var.set("Play error")
 
     def play_pause(self) -> None:
         t = self.queue.current()
@@ -558,6 +574,9 @@ class MainWindow(tk.Tk):
         try:
             if self.pollers.is_running() and self.download_mode_var.get() and self.player.is_ready():
                 if not self.player.is_paused() and self.queue.current_track_id:
+                    if (time.time() - self._last_play_start_ts) < 1.0:
+                        return
+
                     if not self.player.is_playing():
                         cur = self.queue.current()
                         if cur and cur.status == "playing":
@@ -586,10 +605,9 @@ class MainWindow(tk.Tk):
             if t.track_id in keep_ids and t.local_path and Path(t.local_path).exists():
                 keep_paths.add(str(Path(t.local_path).resolve()))
 
-        from donation_media_hub.downloader import Downloader  # local import to avoid cycles
-        Downloader.cleanup_keep(TEMP_DIR, keep_paths)
+        from donation_media_hub.downloader import Downloader as _D  # local import to avoid cycles
+        _D.cleanup_keep(TEMP_DIR, keep_paths)
 
-        # normalize local_path
         for t in self.queue.tracks:
             if t.local_path and not Path(t.local_path).exists():
                 t.local_path = None
@@ -607,7 +625,7 @@ class MainWindow(tk.Tk):
 
         for t in self.queue.tracks:
             t.local_path = None
-            if t.status in {"ready", "playing", "paused"}:
+            if t.status in {"downloading", "playing", "paused"}:
                 t.status = "queued"
 
         self.queue.save()
@@ -649,7 +667,6 @@ class MainWindow(tk.Tk):
 
         self.pollers.stop()
 
-        # ask cleanup
         try:
             has_files = TEMP_DIR.exists() and any(TEMP_DIR.glob("*.mp3"))
             if has_files:
