@@ -27,10 +27,10 @@ jobs:
       - name: Build macOS
         run: pyinstaller donation_media_hub.spec
 
-      - name: Zip macOS app
+      - name: Zip macOS pkg
         run: |
           cd dist
-          zip -r DonationMediaHub-mac.zip DonationMediaHub.app
+          zip -r DonationMediaHub-mac.zip DonationMediaHub.pkg
 
       - name: Upload macOS to Release
         uses: softprops/action-gh-release@v2
