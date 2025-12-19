@@ -144,19 +144,9 @@ pyinstaller donation_media_hub.spec
 
 ---
 
-## 📌 Roadmap
-
-* 🔄 Auto-update
-* ⌨️ Hotkeys (Space / ← / →)
-* 📊 Download progress
-* 📦 Windows installer (.msi)
-* 🔐 Token encryption
-
----
-
 ## 📜 License
 
-MIT (or choose your own)
+MIT
 
 ---
 
