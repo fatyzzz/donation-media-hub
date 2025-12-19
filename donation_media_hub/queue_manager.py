@@ -30,7 +30,10 @@ class QueueManager:
     def save(self) -> None:
         save_json(
             self._queue_file,
-            {"tracks": [asdict(t) for t in self.tracks], "current_track_id": self.current_track_id},
+            {
+                "tracks": [asdict(t) for t in self.tracks],
+                "current_track_id": self.current_track_id,
+            },
         )
 
     def sort(self) -> None:

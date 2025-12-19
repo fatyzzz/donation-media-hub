@@ -1,35 +1,64 @@
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk, messagebox
 import webbrowser
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QApplication,
+    QMessageBox,
+)
 
 
-def show_help(parent: tk.Tk, title: str, text: str, link: str) -> None:
-    win = tk.Toplevel(parent)
-    win.title(title)
-    win.geometry("560x320")
-    win.resizable(False, False)
-    win.transient(parent)
-    win.grab_set()
+class HelpDialog(QDialog):
+    def __init__(self, parent, title: str, text: str, link: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setFixedSize(560, 320)
 
-    frame = ttk.Frame(win, padding=14, style="Card.TFrame")
-    frame.pack(fill="both", expand=True)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-    ttk.Label(frame, text=text, justify="left", anchor="nw", wraplength=520).pack(fill="x", pady=(0, 12))
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        root.addWidget(lbl)
 
-    ttk.Label(frame, text="Ссылка:", style="Muted.TLabel").pack(anchor="w")
-    row = ttk.Frame(frame, style="Card2.TFrame", padding=10)
-    row.pack(fill="x", pady=(8, 8))
+        root.addWidget(QLabel("Ссылка:"))
+        link_lbl = QLabel(f'<a href="{link}">{link}</a>')
+        link_lbl.setTextFormat(Qt.RichText)
+        link_lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        link_lbl.setOpenExternalLinks(False)
+        link_lbl.linkActivated.connect(lambda _u: webbrowser.open(link))
+        root.addWidget(link_lbl)
 
-    link_lbl = ttk.Label(row, text=link, foreground="#7aa2f7", cursor="hand2", wraplength=480)
-    link_lbl.pack(side="left", fill="x", expand=True)
-    link_lbl.bind("<Button-1>", lambda _e: webbrowser.open(link))
+        row = QHBoxLayout()
+        copy_btn = QPushButton("Copy")
+        ok_btn = QPushButton("OK")
+        ok_btn.setObjectName("Primary")
 
-    def copy_link() -> None:
-        parent.clipboard_clear()
-        parent.clipboard_append(link)
-        messagebox.showinfo("OK", "Ссылка скопирована.", parent=win)
+        def copy_link() -> None:
+            QApplication.clipboard().setText(link)
+            QMessageBox.information(self, "OK", "Ссылка скопирована.")
 
-    ttk.Button(row, text="Copy", command=copy_link).pack(side="right", padx=(10, 0))
-    ttk.Button(frame, text="OK", command=win.destroy, style="Accent.TButton").pack(pady=(12, 0))
+        copy_btn.clicked.connect(copy_link)
+        ok_btn.clicked.connect(self.accept)
+
+        row.addWidget(copy_btn)
+        row.addStretch(1)
+        row.addWidget(ok_btn)
+        root.addLayout(row)
+
+
+def ask_yes_no(parent, title: str, text: str) -> bool:
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(QMessageBox.Question)
+    box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    box.setDefaultButton(QMessageBox.No)
+    return box.exec() == QMessageBox.Yes

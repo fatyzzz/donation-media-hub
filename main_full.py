@@ -18,13 +18,15 @@ from tkinter import ttk, messagebox
 import sys
 from pathlib import Path
 
+
 def get_app_dir() -> Path:
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         # PyInstaller exe/app
         return Path(sys.executable).parent
     else:
         # обычный запуск
         return Path(__file__).parent
+
 
 APP_DIR = get_app_dir()
 
@@ -135,7 +137,9 @@ class Track:
     created_ts: float
     url: str
     title: str
-    status: str = "queued"  # queued/downloading/ready/playing/paused/played/skipped/failed
+    status: str = (
+        "queued"  # queued/downloading/ready/playing/paused/played/skipped/failed
+    )
     local_path: Optional[str] = None
     error: Optional[str] = None
 
@@ -169,7 +173,9 @@ def show_help(parent, title: str, text: str, link: str):
         parent.clipboard_clear()
         parent.clipboard_append(link)
 
-    ttk.Button(link_row, text="Copy", command=copy_link, width=10).pack(side="right", padx=(8, 0))
+    ttk.Button(link_row, text="Copy", command=copy_link, width=10).pack(
+        side="right", padx=(8, 0)
+    )
 
     ttk.Button(frame, text="OK", command=win.destroy).pack(pady=(12, 0))
 
@@ -188,14 +194,17 @@ class DonationMediaHub(tk.Tk):
         self.ui_events: "thread_queue.Queue[dict]" = thread_queue.Queue()
 
         # ---- config ----
-        self.config_data = load_json(CONFIG_FILE, {
-            "da_token": "",
-            "dx_token": "",
-            "show_tokens": False,
-            "download_mode": True,
-            "volume": 0.70,
-            "current_track_id": None,
-        })
+        self.config_data = load_json(
+            CONFIG_FILE,
+            {
+                "da_token": "",
+                "dx_token": "",
+                "show_tokens": False,
+                "download_mode": True,
+                "volume": 0.70,
+                "current_track_id": None,
+            },
+        )
 
         # ---- cursors ----
         self.da_state = load_json(STATE_DA_FILE, {"last_media_id": 0})
@@ -209,7 +218,9 @@ class DonationMediaHub(tk.Tk):
                 self.tracks.append(Track(**t))
             except Exception:
                 pass
-        self.current_track_id: Optional[str] = q.get("current_track_id") or self.config_data.get("current_track_id")
+        self.current_track_id: Optional[str] = q.get(
+            "current_track_id"
+        ) or self.config_data.get("current_track_id")
 
         # ---- runtime ----
         self.running = False
@@ -230,9 +241,15 @@ class DonationMediaHub(tk.Tk):
         self.status_var = tk.StringVar(value="Idle")
         self.now_playing_big_var = tk.StringVar(value="—")
         self.now_playing_small_var = tk.StringVar(value="Queue empty")
-        self.download_mode_var = tk.BooleanVar(value=bool(self.config_data.get("download_mode", True)))
-        self.volume_var = tk.DoubleVar(value=float(self.config_data.get("volume", 0.70)))
-        self.show_tokens_var = tk.BooleanVar(value=bool(self.config_data.get("show_tokens", False)))
+        self.download_mode_var = tk.BooleanVar(
+            value=bool(self.config_data.get("download_mode", True))
+        )
+        self.volume_var = tk.DoubleVar(
+            value=float(self.config_data.get("volume", 0.70))
+        )
+        self.show_tokens_var = tk.BooleanVar(
+            value=bool(self.config_data.get("show_tokens", False))
+        )
 
         # ---- styles ----
         self._init_style()
@@ -315,9 +332,15 @@ class DonationMediaHub(tk.Tk):
         now_card = ttk.Frame(outer, style="NowPlaying.TFrame")
         now_card.pack(fill="x")
 
-        ttk.Label(now_card, text="Now Playing", style="PlayerSub.TLabel").pack(anchor="w")
-        ttk.Label(now_card, textvariable=self.now_playing_big_var, style="PlayerTitle.TLabel").pack(anchor="w", pady=(2, 0))
-        ttk.Label(now_card, textvariable=self.now_playing_small_var, style="PlayerSub.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Label(now_card, text="Now Playing", style="PlayerSub.TLabel").pack(
+            anchor="w"
+        )
+        ttk.Label(
+            now_card, textvariable=self.now_playing_big_var, style="PlayerTitle.TLabel"
+        ).pack(anchor="w", pady=(2, 0))
+        ttk.Label(
+            now_card, textvariable=self.now_playing_small_var, style="PlayerSub.TLabel"
+        ).pack(anchor="w", pady=(2, 0))
 
         # TRANSPORT BAR
         transport = ttk.Frame(outer, padding=(0, 10, 0, 6))
@@ -326,8 +349,15 @@ class DonationMediaHub(tk.Tk):
         # left small actions
         left = ttk.Frame(transport)
         left.pack(side="left")
-        ttk.Button(left, text="🗑 Clear queue", style="Small.TButton", command=self.clear_queue).pack(side="left", padx=(0, 8))
-        ttk.Button(left, text="🧹 Clear temp", style="Small.TButton", command=self.clear_temp_folder).pack(side="left")
+        ttk.Button(
+            left, text="🗑 Clear queue", style="Small.TButton", command=self.clear_queue
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            left,
+            text="🧹 Clear temp",
+            style="Small.TButton",
+            command=self.clear_temp_folder,
+        ).pack(side="left")
 
         # center player buttons
         center = ttk.Frame(transport)
@@ -336,11 +366,37 @@ class DonationMediaHub(tk.Tk):
         center_inner = ttk.Frame(center)
         center_inner.pack(anchor="center")
 
-        ttk.Button(center_inner, text="⏮", width=4, style="PlayerBtn.TButton", command=self.go_to_start).pack(side="left", padx=4)
-        ttk.Button(center_inner, text="⏮ Prev", style="PlayerBtn.TButton", command=self.prev_track).pack(side="left", padx=4)
-        ttk.Button(center_inner, text="⏯ Play/Pause", style="PlayerBtn.TButton", command=self.play_pause_toggle).pack(side="left", padx=4)
-        ttk.Button(center_inner, text="Next ⏭", style="PlayerBtn.TButton", command=self.next_track).pack(side="left", padx=4)
-        ttk.Button(center_inner, text="⏩ Skip", style="PlayerBtn.TButton", command=self.skip_track).pack(side="left", padx=4)
+        ttk.Button(
+            center_inner,
+            text="⏮",
+            width=4,
+            style="PlayerBtn.TButton",
+            command=self.go_to_start,
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            center_inner,
+            text="⏮ Prev",
+            style="PlayerBtn.TButton",
+            command=self.prev_track,
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            center_inner,
+            text="⏯ Play/Pause",
+            style="PlayerBtn.TButton",
+            command=self.play_pause_toggle,
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            center_inner,
+            text="Next ⏭",
+            style="PlayerBtn.TButton",
+            command=self.next_track,
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            center_inner,
+            text="⏩ Skip",
+            style="PlayerBtn.TButton",
+            command=self.skip_track,
+        ).pack(side="left", padx=4)
 
         # right status + volume
         right = ttk.Frame(transport)
@@ -350,19 +406,32 @@ class DonationMediaHub(tk.Tk):
         vol_row = ttk.Frame(right)
         vol_row.pack(anchor="e", pady=(6, 0))
         ttk.Label(vol_row, text="🔊").pack(side="left", padx=(0, 6))
-        ttk.Scale(vol_row, from_=0.0, to=1.0, variable=self.volume_var, command=self._set_volume, length=220).pack(side="left")
+        ttk.Scale(
+            vol_row,
+            from_=0.0,
+            to=1.0,
+            variable=self.volume_var,
+            command=self._set_volume,
+            length=220,
+        ).pack(side="left")
 
         # QUEUE TABLE
         queue_wrap = ttk.Frame(outer)
         queue_wrap.pack(fill="both", expand=True, pady=(6, 0))
 
-        ttk.Label(queue_wrap, text="Queue (double click = open link)", style="PlayerSub.TLabel").pack(anchor="w")
+        ttk.Label(
+            queue_wrap,
+            text="Queue (double click = open link)",
+            style="PlayerSub.TLabel",
+        ).pack(anchor="w")
 
         table_frame = ttk.Frame(queue_wrap)
         table_frame.pack(fill="both", expand=True, pady=(6, 0))
 
         columns = ("num", "source", "title", "status", "created", "url")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
+        self.tree = ttk.Treeview(
+            table_frame, columns=columns, show="headings", height=16
+        )
         self.tree.heading("num", text="#")
         self.tree.heading("source", text="Src")
         self.tree.heading("title", text="Title")
@@ -410,19 +479,30 @@ class DonationMediaHub(tk.Tk):
         ttk.Label(row1, text="DonationAlerts token:", width=20).pack(side="left")
         self.da_entry = ttk.Entry(row1, textvariable=self.da_token_var)
         self.da_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(row1, text="❓", width=3, command=self._help_da).pack(side="left", padx=6)
+        ttk.Button(row1, text="❓", width=3, command=self._help_da).pack(
+            side="left", padx=6
+        )
 
         row2 = ttk.Frame(tok)
         row2.pack(fill="x", pady=4)
         ttk.Label(row2, text="DonateX token:", width=20).pack(side="left")
         self.dx_entry = ttk.Entry(row2, textvariable=self.dx_token_var)
         self.dx_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(row2, text="❓", width=3, command=self._help_dx).pack(side="left", padx=6)
+        ttk.Button(row2, text="❓", width=3, command=self._help_dx).pack(
+            side="left", padx=6
+        )
 
         row3 = ttk.Frame(tok)
         row3.pack(fill="x", pady=(8, 0))
-        ttk.Checkbutton(row3, text="Показать токены", variable=self.show_tokens_var, command=self._toggle_token_visibility).pack(side="left")
-        ttk.Button(row3, text="💾 Save", command=self._save_config).pack(side="left", padx=10)
+        ttk.Checkbutton(
+            row3,
+            text="Показать токены",
+            variable=self.show_tokens_var,
+            command=self._toggle_token_visibility,
+        ).pack(side="left")
+        ttk.Button(row3, text="💾 Save", command=self._save_config).pack(
+            side="left", padx=10
+        )
 
         self._toggle_token_visibility()
 
@@ -434,7 +514,7 @@ class DonationMediaHub(tk.Tk):
             mode,
             text="Скачивать MP3 и проигрывать (через API). Если выключить — просто открывать ссылку в браузере.",
             variable=self.download_mode_var,
-            command=self._save_config
+            command=self._save_config,
         ).pack(anchor="w")
 
         # Polling card
@@ -443,10 +523,16 @@ class DonationMediaHub(tk.Tk):
 
         r = ttk.Frame(pol)
         r.pack(fill="x")
-        ttk.Button(r, text="▶ Start polling", command=self.start).pack(side="left", padx=(0, 8))
+        ttk.Button(r, text="▶ Start polling", command=self.start).pack(
+            side="left", padx=(0, 8)
+        )
         ttk.Button(r, text="⏹ Stop", command=self.stop).pack(side="left")
 
-        ttk.Label(pol, text="Подсказка: можно оставить один токен пустым — второй сервис будет работать.", padding=(0, 8, 0, 0)).pack(anchor="w")
+        ttk.Label(
+            pol,
+            text="Подсказка: можно оставить один токен пустым — второй сервис будет работать.",
+            padding=(0, 8, 0, 0),
+        ).pack(anchor="w")
 
         # Extra actions
         extra = ttk.LabelFrame(outer, text="Maintenance", padding=12)
@@ -454,8 +540,12 @@ class DonationMediaHub(tk.Tk):
 
         rr = ttk.Frame(extra)
         rr.pack(fill="x")
-        ttk.Button(rr, text="🗑 Clear queue", command=self.clear_queue).pack(side="left", padx=(0, 8))
-        ttk.Button(rr, text="🧹 Clear temp", command=self.clear_temp_folder).pack(side="left")
+        ttk.Button(rr, text="🗑 Clear queue", command=self.clear_queue).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(rr, text="🧹 Clear temp", command=self.clear_temp_folder).pack(
+            side="left"
+        )
 
     # ===================== HELP =====================
     def _help_da(self):
@@ -509,10 +599,13 @@ class DonationMediaHub(tk.Tk):
         save_json(CONFIG_FILE, self.config_data)
 
     def _save_queue(self):
-        save_json(QUEUE_FILE, {
-            "tracks": [asdict(t) for t in self.tracks],
-            "current_track_id": self.current_track_id
-        })
+        save_json(
+            QUEUE_FILE,
+            {
+                "tracks": [asdict(t) for t in self.tracks],
+                "current_track_id": self.current_track_id,
+            },
+        )
 
     # ===================== QUEUE / TABLE =====================
     def _refresh_table(self):
@@ -530,7 +623,7 @@ class DonationMediaHub(tk.Tk):
                 t.title,
                 t.status,
                 human_time_utc(t.created_ts),
-                t.url
+                t.url,
             )
             iid = t.track_id
             self.tree.insert("", "end", iid=iid, values=values)
@@ -603,6 +696,7 @@ class DonationMediaHub(tk.Tk):
         self.tracks.sort(key=lambda t: t.created_ts)
 
         keep_current = self.current_track_id
+
         # Prefer keeping the newest tracks.
         # Remove from the oldest side, but never remove current/playing/paused if possible.
         def removable(t: Track) -> bool:
@@ -675,7 +769,9 @@ class DonationMediaHub(tk.Tk):
             self.poll_threads.append(th)
 
         if self.downloader_thread is None or not self.downloader_thread.is_alive():
-            self.downloader_thread = threading.Thread(target=self._download_worker_loop, daemon=True)
+            self.downloader_thread = threading.Thread(
+                target=self._download_worker_loop, daemon=True
+            )
             self.downloader_thread.start()
 
         self._ensure_current_track()
@@ -688,7 +784,11 @@ class DonationMediaHub(tk.Tk):
                 self.play_current(force=True)
             else:
                 # If already ready downloaded, start immediately
-                t = self._get_track(self.current_track_id) if self.current_track_id else None
+                t = (
+                    self._get_track(self.current_track_id)
+                    if self.current_track_id
+                    else None
+                )
                 if t and t.local_path and Path(t.local_path).exists():
                     self.play_current(force=True)
                 else:
@@ -771,7 +871,13 @@ class DonationMediaHub(tk.Tk):
                 except Exception:
                     created_ts = time.time()
 
-            t = self._make_track("DA", float(created_ts), str(url), str(title), stable_suffix=str(media_id))
+            t = self._make_track(
+                "DA",
+                float(created_ts),
+                str(url),
+                str(title),
+                stable_suffix=str(media_id),
+            )
             self.ui_events.put({"type": "new_track", "track": asdict(t)})
 
             if media_id > new_max:
@@ -834,7 +940,9 @@ class DonationMediaHub(tk.Tk):
                 self.title_cache[url] = title
 
             stable_suffix = d.get("id") or ts_str
-            t = self._make_track("DX", float(ts), str(url), str(title), stable_suffix=str(stable_suffix))
+            t = self._make_track(
+                "DX", float(ts), str(url), str(title), stable_suffix=str(stable_suffix)
+            )
             self.ui_events.put({"type": "new_track", "track": asdict(t)})
 
             updated_last_ts = ts
@@ -844,9 +952,18 @@ class DonationMediaHub(tk.Tk):
             save_json(STATE_DX_FILE, self.dx_state)
 
     # ===================== TRACK CREATE / DEDUPE =====================
-    def _make_track(self, source: str, created_ts: float, url: str, title: str, stable_suffix: str) -> Track:
+    def _make_track(
+        self, source: str, created_ts: float, url: str, title: str, stable_suffix: str
+    ) -> Track:
         tid = f"{source}:{stable_suffix}"
-        return Track(track_id=tid, source=source, created_ts=created_ts, url=url, title=title, status="queued")
+        return Track(
+            track_id=tid,
+            source=source,
+            created_ts=created_ts,
+            url=url,
+            title=title,
+            status="queued",
+        )
 
     def _append_track_if_new(self, t: Track) -> bool:
         if any(x.track_id == t.track_id for x in self.tracks):
@@ -916,7 +1033,11 @@ class DonationMediaHub(tk.Tk):
                         self._save_queue()
 
                         # AUTO START: start only if this is current track and nothing is playing
-                        if t.track_id == self.current_track_id and self.download_mode_var.get() and not self._is_playing_anything():
+                        if (
+                            t.track_id == self.current_track_id
+                            and self.download_mode_var.get()
+                            and not self._is_playing_anything()
+                        ):
                             self.play_current(force=True)
 
                 else:
@@ -958,7 +1079,9 @@ class DonationMediaHub(tk.Tk):
                 self._download_track(t)
 
     def _download_track(self, t: Track):
-        self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "downloading"})
+        self.ui_events.put(
+            {"type": "track_status", "track_id": t.track_id, "status": "downloading"}
+        )
         try:
             ensure_temp_dir()
 
@@ -979,13 +1102,28 @@ class DonationMediaHub(tk.Tk):
             with out_path.open("wb") as f:
                 f.write(r.content)
 
-            self.ui_events.put({"type": "download_done", "track_id": t.track_id, "path": str(out_path)})
-            self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "ready"})
-            self.ui_events.put({"type": "log", "msg": f"✅ downloaded: {out_path.name}"})
+            self.ui_events.put(
+                {"type": "download_done", "track_id": t.track_id, "path": str(out_path)}
+            )
+            self.ui_events.put(
+                {"type": "track_status", "track_id": t.track_id, "status": "ready"}
+            )
+            self.ui_events.put(
+                {"type": "log", "msg": f"✅ downloaded: {out_path.name}"}
+            )
 
         except Exception as e:
-            self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "failed", "error": str(e)})
-            self.ui_events.put({"type": "log", "msg": f"❌ download failed: {t.title} — {e}"})
+            self.ui_events.put(
+                {
+                    "type": "track_status",
+                    "track_id": t.track_id,
+                    "status": "failed",
+                    "error": str(e),
+                }
+            )
+            self.ui_events.put(
+                {"type": "log", "msg": f"❌ download failed: {t.title} — {e}"}
+            )
 
     # ===================== PLAYBACK CORE =====================
     def _is_playing_anything(self) -> bool:
@@ -1054,7 +1192,10 @@ class DonationMediaHub(tk.Tk):
 
         # download mode
         if not self.audio_ready:
-            messagebox.showerror("Audio error", "Нет звука: установи pygame и перезапусти.\n\npip install pygame")
+            messagebox.showerror(
+                "Audio error",
+                "Нет звука: установи pygame и перезапусти.\n\npip install pygame",
+            )
             return
 
         if not t.local_path or not Path(t.local_path).exists():
@@ -1256,7 +1397,11 @@ class DonationMediaHub(tk.Tk):
 
             keep_paths = set()
             for t in self.tracks:
-                if t.track_id in keep_ids and t.local_path and Path(t.local_path).exists():
+                if (
+                    t.track_id in keep_ids
+                    and t.local_path
+                    and Path(t.local_path).exists()
+                ):
                     keep_paths.add(str(Path(t.local_path).resolve()))
 
             for p in TEMP_DIR.glob("*.mp3"):
@@ -1313,7 +1458,7 @@ class DonationMediaHub(tk.Tk):
                     yes = messagebox.askyesno(
                         "Очистка временных файлов",
                         "Очистить оставшиеся загруженные треки?\n\n(Да = удалить mp3 из temp папки)",
-                        parent=self
+                        parent=self,
                     )
                     if yes:
                         try:

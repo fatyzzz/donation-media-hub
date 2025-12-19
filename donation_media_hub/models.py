@@ -11,6 +11,8 @@ class Track:
     created_ts: float
     url: str
     title: str
-    status: str = "queued"  # queued/downloading/ready/playing/paused/played/skipped/failed
+    status: str = (
+        "queued"  # queued/downloading/ready/playing/paused/played/skipped/failed
+    )
     local_path: Optional[str] = None
     error: Optional[str] = None

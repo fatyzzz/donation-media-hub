@@ -1,34 +1,36 @@
 from __future__ import annotations
 
-import queue as thread_queue
-import shutil
-import threading
-import time
-import webbrowser
+import sys
 from pathlib import Path
-from typing import Optional
 
-import tkinter as tk
-from tkinter import ttk, messagebox
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QFrame,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QCheckBox,
+    QSlider,
+    QTableView,
+    QPlainTextEdit,
+    QHeaderView,
+)
 
 from donation_media_hub.config import APP_TITLE
-from donation_media_hub.downloader import Downloader
-from donation_media_hub.models import Track
-from donation_media_hub.paths import TEMP_DIR
-from donation_media_hub.playback import AudioPlayer
-from donation_media_hub.pollers import Pollers
+from donation_media_hub.ui.style import load_qss
+from donation_media_hub.ui.models import QueueTableModel
+from donation_media_hub.ui.dialogs import HelpDialog, ask_yes_no
+from donation_media_hub.ui.controller import PlayerController
 from donation_media_hub.queue_manager import QueueManager
-from donation_media_hub.storage import load_json, save_json
-from donation_media_hub.ui.dialogs import show_help
-from donation_media_hub.ui.theme import DarkTheme
+from donation_media_hub.paths import TEMP_DIR
 
 
-class MainWindow(tk.Tk):
-    """
-    Vertical player UI + event-driven logic.
-    Background work (polling / downloading) emits events -> UI thread handles.
-    """
-
+class MainWindow(QMainWindow):
     def __init__(
         self,
         queue_manager: QueueManager,
@@ -37,653 +39,399 @@ class MainWindow(tk.Tk):
         state_dx_file: Path,
     ) -> None:
         super().__init__()
-
         self.queue = queue_manager
-        self.config_file = config_file
-        self.state_da_file = state_da_file
-        self.state_dx_file = state_dx_file
 
-        self.ui_events: "thread_queue.Queue[dict]" = thread_queue.Queue()
-        self._closing = False
-
-        # anti-race: protects watchdog from firing instantly after play()
-        self._last_play_start_ts: float = 0.0
-
-        self._load_config()
-        self._load_states()
-
-        self.downloader = Downloader(TEMP_DIR)
-        self.player = AudioPlayer(volume=float(self.config_data.get("volume", 0.7)))
-
-        self.pollers = Pollers(
-            emit_event=self.ui_events.put,
-            get_da_token=lambda: self.da_token_var.get(),
-            get_dx_token=lambda: self.dx_token_var.get(),
-            da_last_media_id=int(self.da_state.get("last_media_id", 0) or 0),
-            dx_last_timestamp=self.dx_state.get("last_timestamp"),
-        )
-
-        self._download_thread = threading.Thread(target=self._download_loop, daemon=True)
-        self._download_thread.start()
+        self.setWindowTitle(APP_TITLE)
+        self.resize(1180, 760)
+        self.setStyleSheet(load_qss())
 
         self._build_ui()
-        self._refresh_queue_table()
-        self._update_now_playing()
+        self._wire()
 
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self.after(120, self._process_ui_events)
-        self.after(450, self._watchdog)
-
-    # -------------------- config/state --------------------
-    def _load_config(self) -> None:
-        self.config_data = load_json(
-            self.config_file,
-            {
-                "da_token": "",
-                "dx_token": "",
-                "show_tokens": False,
-                "download_mode": True,
-                "volume": 0.7,
-                "current_track_id": None,
-            },
+        # --- controller (SOURCE OF TRUTH) ---
+        self.controller = PlayerController(
+            queue_manager=self.queue,
+            config_file=config_file,
+            state_da_file=state_da_file,
+            state_dx_file=state_dx_file,
+            on_ui_update=self._ui_refresh,
+            on_log=self._log,
+            on_status_text=self._set_status,
+            on_now_playing=self._set_now_playing,
+            set_current_in_view=self._select_track_id,
         )
 
-        self.da_token_var = tk.StringVar(value=self.config_data.get("da_token", ""))
-        self.dx_token_var = tk.StringVar(value=self.config_data.get("dx_token", ""))
-        self.show_tokens_var = tk.BooleanVar(value=bool(self.config_data.get("show_tokens", False)))
-        self.download_mode_var = tk.BooleanVar(value=bool(self.config_data.get("download_mode", True)))
-        self.volume_var = tk.DoubleVar(value=float(self.config_data.get("volume", 0.7)))
+        # ------------------------------------------------------------------
+        # RESTORE CONFIG INTO UI (CRITICAL: BLOCK WIDGET SIGNALS)
+        # ------------------------------------------------------------------
+        cfg = self.controller.config_data
 
-        self.queue.set_current(self.config_data.get("current_track_id"))
+        widgets = (
+            self.da_token,
+            self.dx_token,
+            self.show_tokens,
+            self.download_mode,
+            self.vol,
+        )
 
-    def _save_config(self) -> None:
-        self.config_data["da_token"] = self.da_token_var.get().strip()
-        self.config_data["dx_token"] = self.dx_token_var.get().strip()
-        self.config_data["show_tokens"] = bool(self.show_tokens_var.get())
-        self.config_data["download_mode"] = bool(self.download_mode_var.get())
-        self.config_data["volume"] = float(self.volume_var.get())
-        self.config_data["current_track_id"] = self.queue.current_track_id
-        save_json(self.config_file, self.config_data)
+        for w in widgets:
+            w.blockSignals(True)
 
-    def _load_states(self) -> None:
-        self.da_state = load_json(self.state_da_file, {"last_media_id": 0})
-        self.dx_state = load_json(self.state_dx_file, {"last_timestamp": None})
+        self.da_token.setText(cfg.get("da_token", ""))
+        self.dx_token.setText(cfg.get("dx_token", ""))
+        self.show_tokens.setChecked(bool(cfg.get("show_tokens", False)))
+        self.download_mode.setChecked(bool(cfg.get("download_mode", True)))
+        self.vol.setValue(int(float(cfg.get("volume", 0.7)) * 100))
 
-    def _save_states(self) -> None:
-        snap = self.pollers.state_snapshot()
-        self.da_state["last_media_id"] = int(snap.get("da_last_media_id", 0) or 0)
-        self.dx_state["last_timestamp"] = snap.get("dx_last_timestamp")
-        save_json(self.state_da_file, self.da_state)
-        save_json(self.state_dx_file, self.dx_state)
+        for w in widgets:
+            w.blockSignals(False)
+
+        self._apply_show_tokens()
+
+        # ------------------------------------------------------------------
+        # MODEL
+        # ------------------------------------------------------------------
+        self.model = QueueTableModel(self.queue)
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.setSelectionMode(QTableView.SingleSelection)
+        self.table.setAlternatingRowColors(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Src
+        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Title
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.setColumnWidth(2, 140)
+
+        # ------------------------------------------------------------------
+        # TIMERS
+        # ------------------------------------------------------------------
+        self.ev_timer = QTimer(self)
+        self.ev_timer.timeout.connect(self.controller.process_ui_events)
+        self.ev_timer.start(120)
+
+        self.wd_timer = QTimer(self)
+        self.wd_timer.timeout.connect(self.controller.watchdog)
+        self.wd_timer.start(450)
+
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self._ui_refresh)
+        self.refresh_timer.start(650)
+
+        # initial draw
+        self._ui_refresh()
 
     # -------------------- UI --------------------
     def _build_ui(self) -> None:
-        self.title(APP_TITLE)
-        self.geometry("520x860")
-        self.minsize(480, 780)
+        root = QWidget(self)
+        self.setCentralWidget(root)
 
-        DarkTheme().apply(self)
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        root = ttk.Frame(self, padding=12)
-        root.pack(fill="both", expand=True)
+        # Sidebar
+        self.sidebar = QFrame(objectName="Sidebar")
+        self.sidebar.setFixedWidth(320)
+        s = QVBoxLayout(self.sidebar)
+        s.setContentsMargins(18, 18, 18, 18)
+        s.setSpacing(12)
 
-        header = ttk.Frame(root, style="Card.TFrame", padding=14)
-        header.pack(fill="x")
+        brand = QLabel("Donation Media Hub")
+        brand.setStyleSheet("font-size:14pt;font-weight:800;color:#fff;")
+        s.addWidget(brand)
 
-        ttk.Label(header, text="Now Playing", style="Muted.TLabel").pack(anchor="w")
-        self.now_big_var = tk.StringVar(value="—")
-        self.now_small_var = tk.StringVar(value="Queue empty")
-        ttk.Label(header, textvariable=self.now_big_var, style="Title.TLabel").pack(anchor="w", pady=(6, 0))
-        ttk.Label(header, textvariable=self.now_small_var, style="Small.TLabel").pack(anchor="w", pady=(4, 0))
+        # Tokens card
+        card = QFrame(objectName="Card")
+        c = QVBoxLayout(card)
+        c.setContentsMargins(14, 14, 14, 14)
+        c.setSpacing(10)
 
-        controls = ttk.Frame(root, style="Card.TFrame", padding=12)
-        controls.pack(fill="x", pady=(10, 0))
+        c.addWidget(QLabel("Tokens / Mode", objectName="Sub"))
 
-        row1 = ttk.Frame(controls)
-        row1.pack(fill="x")
+        self.da_token = QLineEdit()
+        self.da_token.setPlaceholderText("DonationAlerts token")
+        self.dx_token = QLineEdit()
+        self.dx_token.setPlaceholderText("DonateX token")
 
-        ttk.Button(row1, text="⏮", width=4, command=self.go_start).pack(side="left", padx=(0, 6))
-        ttk.Button(row1, text="Prev", command=self.prev_track).pack(side="left", padx=(0, 6))
-        ttk.Button(
-            row1,
-            text="Play/Pause",
-            style="Accent.TButton",
-            command=self.play_pause,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ttk.Button(row1, text="Next", command=self.next_track).pack(side="left", padx=(0, 6))
-        ttk.Button(row1, text="Skip", command=self.skip_track).pack(side="left")
+        row_da = QHBoxLayout()
+        row_da.addWidget(self.da_token, 1)
+        self.btn_help_da = QPushButton("?")
+        self.btn_help_da.setFixedWidth(36)
+        row_da.addWidget(self.btn_help_da)
 
-        row2 = ttk.Frame(controls)
-        row2.pack(fill="x", pady=(10, 0))
+        row_dx = QHBoxLayout()
+        row_dx.addWidget(self.dx_token, 1)
+        self.btn_help_dx = QPushButton("?")
+        self.btn_help_dx.setFixedWidth(36)
+        row_dx.addWidget(self.btn_help_dx)
 
-        self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(row2, textvariable=self.status_var, style="Muted.TLabel").pack(side="left")
+        c.addLayout(row_da)
+        c.addLayout(row_dx)
 
-        ttk.Label(row2, text="🔊", style="Muted.TLabel").pack(side="left", padx=(12, 6))
-        vol = ttk.Scale(row2, from_=0.0, to=1.0, variable=self.volume_var, command=self._on_volume, length=180)
-        vol.pack(side="left")
+        self.show_tokens = QCheckBox("Show tokens")
+        self.download_mode = QCheckBox("Download & Play (mp3)")
+        c.addWidget(self.show_tokens)
+        c.addWidget(self.download_mode)
 
-        queue_card = ttk.Frame(root, style="Card.TFrame", padding=12)
-        queue_card.pack(fill="both", expand=True, pady=(10, 0))
+        row_ctrl = QHBoxLayout()
+        self.btn_start = QPushButton("Start")
+        self.btn_start.setObjectName("Primary")
+        self.btn_stop = QPushButton("Stop")
+        row_ctrl.addWidget(self.btn_start, 1)
+        row_ctrl.addWidget(self.btn_stop, 1)
+        c.addLayout(row_ctrl)
 
-        top = ttk.Frame(queue_card)
-        top.pack(fill="x")
+        row_maint = QHBoxLayout()
+        self.btn_temp = QPushButton("Temp")
+        self.btn_clear = QPushButton("Clear")
+        self.btn_clear.setObjectName("Danger")
+        row_maint.addWidget(self.btn_temp, 1)
+        row_maint.addWidget(self.btn_clear, 1)
+        c.addLayout(row_maint)
 
-        ttk.Label(top, text="Queue", style="Big.TLabel").pack(side="left")
-        ttk.Button(top, text="Clear", style="Danger.TButton", command=self.clear_queue).pack(side="right")
+        s.addWidget(card)
 
-        columns = ("num", "title", "status")
-        self.tree = ttk.Treeview(queue_card, columns=columns, show="headings", height=14)
-        self.tree.heading("num", text="#")
-        self.tree.heading("title", text="Title")
-        self.tree.heading("status", text="Status")
+        # Volume card
+        card2 = QFrame(objectName="Card2")
+        v = QVBoxLayout(card2)
+        v.setContentsMargins(14, 14, 14, 14)
+        v.setSpacing(10)
 
-        self.tree.column("num", width=42, anchor="center")
-        self.tree.column("title", width=320)
-        self.tree.column("status", width=90, anchor="center")
+        v.addWidget(QLabel("Volume", objectName="Sub"))
+        self.vol = QSlider(Qt.Horizontal)
+        self.vol.setRange(0, 100)
+        self.vol.setValue(70)
+        v.addWidget(self.vol)
 
-        sb = ttk.Scrollbar(queue_card, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
+        self.status = QLabel("Idle", objectName="Sub")
+        v.addWidget(self.status)
 
-        self.tree.pack(side="left", fill="both", expand=True, pady=(10, 0))
-        sb.pack(side="right", fill="y", pady=(10, 0))
+        s.addWidget(card2)
+        s.addStretch(1)
 
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.tree.bind("<Double-1>", self._on_open_link)
+        outer.addWidget(self.sidebar)
 
-        settings = ttk.Frame(root, style="Card.TFrame", padding=12)
-        settings.pack(fill="x", pady=(10, 0))
+        # Main area
+        main = QVBoxLayout()
+        main.setContentsMargins(18, 18, 18, 18)
+        main.setSpacing(12)
 
-        ttk.Label(settings, text="Tokens / Mode", style="Big.TLabel").pack(anchor="w")
+        # Now Playing card
+        np = QFrame(objectName="Card")
+        npl = QVBoxLayout(np)
+        npl.setContentsMargins(16, 16, 16, 16)
+        npl.setSpacing(6)
 
-        r1 = ttk.Frame(settings)
-        r1.pack(fill="x", pady=(8, 0))
-        ttk.Label(r1, text="DA:", width=5, style="Muted.TLabel").pack(side="left")
-        self.da_entry = ttk.Entry(r1, textvariable=self.da_token_var)
-        self.da_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(r1, text="?", width=3, command=self._help_da).pack(side="left", padx=(6, 0))
+        self.now_title = QLabel("—", objectName="Title")
+        self.now_sub = QLabel("Queue empty", objectName="Sub")
+        npl.addWidget(QLabel("Now Playing", objectName="Sub"))
+        npl.addWidget(self.now_title)
+        npl.addWidget(self.now_sub)
 
-        r2 = ttk.Frame(settings)
-        r2.pack(fill="x", pady=(8, 0))
-        ttk.Label(r2, text="DX:", width=5, style="Muted.TLabel").pack(side="left")
-        self.dx_entry = ttk.Entry(r2, textvariable=self.dx_token_var)
-        self.dx_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(r2, text="?", width=3, command=self._help_dx).pack(side="left", padx=(6, 0))
+        # Transport row
+        tr = QHBoxLayout()
+        tr.setSpacing(10)
+        self.btn_go_start = QPushButton("⏮")
+        self.btn_prev = QPushButton("Prev")
+        self.btn_play = QPushButton("Play/Pause")
+        self.btn_play.setObjectName("Primary")
+        self.btn_next = QPushButton("Next")
+        self.btn_skip = QPushButton("Skip")
+        tr.addWidget(self.btn_go_start)
+        tr.addWidget(self.btn_prev)
+        tr.addWidget(self.btn_play)
+        tr.addWidget(self.btn_next)
+        tr.addWidget(self.btn_skip)
+        npl.addLayout(tr)
 
-        r3 = ttk.Frame(settings)
-        r3.pack(fill="x", pady=(10, 0))
+        main.addWidget(np)
 
-        ttk.Checkbutton(r3, text="Show tokens", variable=self.show_tokens_var, command=self._toggle_tokens).pack(side="left")
-        ttk.Checkbutton(r3, text="Download & Play (mp3)", variable=self.download_mode_var, command=self._save_config).pack(
-            side="left", padx=(12, 0)
-        )
+        # Queue table card
+        qc = QFrame(objectName="Card")
+        qcl = QVBoxLayout(qc)
+        qcl.setContentsMargins(16, 16, 16, 16)
+        qcl.setSpacing(10)
 
-        r4 = ttk.Frame(settings)
-        r4.pack(fill="x", pady=(10, 0))
-        ttk.Button(r4, text="Start", style="Accent.TButton", command=self.start).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ttk.Button(r4, text="Stop", command=self.stop).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ttk.Button(r4, text="Temp", command=self.clear_temp).pack(side="left", fill="x", expand=True)
+        qcl.addWidget(QLabel("Queue (double click opens link)", objectName="Sub"))
 
-        log = ttk.Frame(root, style="Card2.TFrame", padding=10)
-        log.pack(fill="x", pady=(10, 0))
-        ttk.Label(log, text="Log", style="Muted.TLabel").pack(anchor="w")
-        self.log_text = tk.Text(
-            log,
-            height=7,
-            bg="#10131a",
-            fg="#e7eaf0",
-            insertbackground="#e7eaf0",
-            relief="flat",
-            highlightthickness=1,
-            highlightbackground="#242a3a",
-        )
-        self.log_text.pack(fill="x", pady=(8, 0))
+        self.table = QTableView()
+        qcl.addWidget(self.table, 1)
 
-        self._toggle_tokens()
+        main.addWidget(qc, 1)
 
-    def _toggle_tokens(self) -> None:
-        show = bool(self.show_tokens_var.get())
-        self.da_entry.configure(show="" if show else "*")
-        self.dx_entry.configure(show="" if show else "*")
-        self._save_config()
+        # Log
+        lc = QFrame(objectName="Card2")
+        lcl = QVBoxLayout(lc)
+        lcl.setContentsMargins(16, 16, 16, 16)
+        lcl.setSpacing(10)
+        lcl.addWidget(QLabel("Log", objectName="Sub"))
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(600)
+        lcl.addWidget(self.log)
+        main.addWidget(lc)
 
-    def _on_volume(self, _evt=None) -> None:
-        self.player.set_volume(float(self.volume_var.get()))
-        self._save_config()
+        outer.addLayout(main, 1)
 
+    def _wire(self) -> None:
+        self.btn_help_da.clicked.connect(self._help_da)
+        self.btn_help_dx.clicked.connect(self._help_dx)
+
+        self.show_tokens.toggled.connect(self._apply_show_tokens)
+        self.download_mode.toggled.connect(self._save_config)
+        self.da_token.textChanged.connect(self._save_config)
+        self.dx_token.textChanged.connect(self._save_config)
+        self.vol.valueChanged.connect(self._on_volume)
+
+        self.btn_start.clicked.connect(self._start)
+        self.btn_stop.clicked.connect(self._stop)
+
+        self.btn_clear.clicked.connect(self._clear_queue)
+        self.btn_temp.clicked.connect(self._clear_temp)
+
+        self.btn_go_start.clicked.connect(lambda: self.controller.go_start())
+        self.btn_prev.clicked.connect(lambda: self.controller.prev_track())
+        self.btn_play.clicked.connect(lambda: self.controller.play_pause())
+        self.btn_next.clicked.connect(lambda: self.controller.next_track(auto=False))
+        self.btn_skip.clicked.connect(lambda: self.controller.skip_track())
+
+        self.table.doubleClicked.connect(self._open_selected_link)
+        self.table.clicked.connect(self._select_current_from_table)
+
+    # -------------------- UI helpers --------------------
     def _log(self, msg: str) -> None:
-        try:
-            self.log_text.insert("end", msg + "\n")
-            self.log_text.see("end")
-        except Exception:
-            pass
+        self.log.appendPlainText(msg)
 
-    # -------------------- actions: start/stop --------------------
-    def start(self) -> None:
-        da = self.da_token_var.get().strip()
-        dx = self.dx_token_var.get().strip()
-        if not da and not dx:
-            messagebox.showerror("Ошибка", "Вставь хотя бы один токен (DA или DX).", parent=self)
-            return
+    def _set_status(self, text: str) -> None:
+        self.status.setText(text)
 
-        self.pollers.da_client.token = da
-        self.pollers.dx_client.token = dx
+    def _set_now_playing(self, big: str, small: str) -> None:
+        self.now_title.setText(big)
+        self.now_sub.setText(small)
 
-        self.pollers.start()
-        self.status_var.set("Polling: ON")
-        self._log("▶ polling started")
+    def _ui_refresh(self) -> None:
+        if hasattr(self, "model"):
+            self.model.refresh()
+            self._ensure_selection_visible()
+
+    def _ensure_selection_visible(self) -> None:
+        row = self.model.row_of_track_id(self.queue.current_track_id)
+        if row >= 0:
+            idx = self.model.index(row, 0)
+            sel = self.table.selectionModel()
+            if sel and not sel.isRowSelected(row, idx.parent()):
+                self.table.selectRow(row)
+            self.table.scrollTo(idx)
+
+    def _select_track_id(self, track_id: str | None) -> None:
+        row = self.model.row_of_track_id(track_id)
+        if row >= 0:
+            self.table.selectRow(row)
+
+    # -------------------- actions --------------------
+    def _apply_show_tokens(self) -> None:
+        show = self.show_tokens.isChecked()
+        self.da_token.setEchoMode(QLineEdit.Normal if show else QLineEdit.Password)
+        self.dx_token.setEchoMode(QLineEdit.Normal if show else QLineEdit.Password)
         self._save_config()
 
-        if self.queue.current() and (not self.player.is_playing()) and (not self.player.is_paused()):
-            self.play_current(force=True)
+    def _save_config(self) -> None:
+        if not hasattr(self, "controller"):
+            return
+        self.controller.save_config(
+            da_token=self.da_token.text(),
+            dx_token=self.dx_token.text(),
+            show_tokens=self.show_tokens.isChecked(),
+            download_mode=self.download_mode.isChecked(),
+            volume=float(self.vol.value()) / 100.0,
+        )
 
-    def stop(self) -> None:
-        self.pollers.stop()
-        self.status_var.set("Polling: OFF")
-        self._log("⏹ polling stopped")
-        self._save_states()
+    def _on_volume(self) -> None:
+        if hasattr(self, "controller"):
+            self.controller.set_volume(float(self.vol.value()) / 100.0)
+            self._save_config()
+
+    def _start(self) -> None:
+        self._save_config()
+        self.controller.start()
+
+    def _stop(self) -> None:
+        self.controller.stop()
         self._save_config()
 
-    # -------------------- selection + open --------------------
-    def _on_select(self, _evt=None) -> None:
-        tid = self._selected_id()
-        if not tid:
-            return
-        self.queue.set_current(tid)
-        self.queue.save()
-        self._save_config()
-        self._update_now_playing()
+    def _clear_queue(self) -> None:
+        self.controller.clear_queue()
 
-    def _on_open_link(self, _evt=None) -> None:
-        t = self.queue.current()
-        if not t:
-            return
-        webbrowser.open(t.url)
+    def _clear_temp(self) -> None:
+        self.controller.clear_temp()
 
-    def _selected_id(self) -> Optional[str]:
-        sel = self.tree.selection()
-        return sel[0] if sel else None
+    def _select_current_from_table(self) -> None:
+        idx = self.table.currentIndex()
+        t = self.model.track_at(idx.row())
+        if t:
+            self.controller.set_current_by_id(t.track_id)
 
-    # -------------------- queue table --------------------
-    def _refresh_queue_table(self) -> None:
-        for iid in self.tree.get_children():
-            self.tree.delete(iid)
-
-        self.queue.sort()
-        for idx, t in enumerate(self.queue.tracks, start=1):
-            self.tree.insert("", "end", iid=t.track_id, values=(idx, t.title, t.status))
-
-        if self.queue.current_track_id and self.queue.get(self.queue.current_track_id):
-            try:
-                self.tree.selection_set(self.queue.current_track_id)
-                self.tree.see(self.queue.current_track_id)
-            except Exception:
-                pass
-
-        self.queue.save()
-        self.after(900, self._refresh_queue_table)
-
-    def _update_now_playing(self) -> None:
-        t = self.queue.current()
-        if not t:
-            self.now_big_var.set("—")
-            self.now_small_var.set("Queue empty")
-            return
-        self.now_big_var.set(f"[{t.source}] {t.title}")
-        extra = f"Status: {t.status}"
-        if t.local_path and Path(t.local_path).exists():
-            extra += f" · {Path(t.local_path).name}"
-        self.now_small_var.set(extra)
-
-    # -------------------- events from threads --------------------
-    def _process_ui_events(self) -> None:
-        try:
-            while True:
-                ev = self.ui_events.get_nowait()
-                et = ev.get("type")
-
-                if et == "log":
-                    self._log(str(ev.get("msg", "")))
-
-                elif et == "new_track":
-                    try:
-                        t = Track(**ev["track"])
-                        before_len = len(self.queue.tracks)
-                        if self.queue.append_if_new(t):
-                            self._log(f"➕ NEW [{t.source}] {t.title}")
-                            self.status_var.set(f"Queue: {len(self.queue.tracks)}")
-
-                            if before_len == 0 and self.queue.current_track_id is None:
-                                self.queue.set_current(t.track_id)
-
-                            if not self.player.is_playing() and not self.player.is_paused():
-                                self.play_current(force=True)
-
-                            self.queue.save()
-                            self._save_config()
-                            self._update_now_playing()
-                    except Exception as e:
-                        self._log(f"❌ track parse error: {e}")
-
-                elif et == "track_status":
-                    tid = ev.get("track_id")
-                    t = self.queue.get(tid) if tid else None
-                    if t:
-                        st = ev.get("status", t.status) or t.status
-                        if st == "ready":
-                            st = "queued"
-                        t.status = st
-                        if ev.get("error"):
-                            t.error = str(ev["error"])
-                        self.queue.save()
-                        self._update_now_playing()
-
-                elif et == "download_done":
-                    tid = ev.get("track_id")
-                    path = ev.get("path")
-                    t = self.queue.get(tid) if tid else None
-                    if t:
-                        t.local_path = str(path)
-                        if t.status not in {"playing", "paused"}:
-                            t.status = "queued"
-                        self.queue.save()
-
-                        if (
-                            t.track_id == self.queue.current_track_id
-                            and self.download_mode_var.get()
-                            and not self.player.is_playing()
-                            and not self.player.is_paused()
-                        ):
-                            self.play_current(force=True)
-
-        except thread_queue.Empty:
-            pass
-
-        self.after(120, self._process_ui_events)
-
-    # -------------------- download loop --------------------
-    def _download_loop(self) -> None:
-        while True:
-            time.sleep(0.25)
-
-            if not self.pollers.is_running():
-                continue
-            if not self.download_mode_var.get():
-                continue
-
-            cur = self.queue.current()
-            if not cur:
-                continue
-
-            idx = self.queue.index_of_current()
-            targets: list[Track] = []
-            if 0 <= idx < len(self.queue.tracks):
-                targets.append(self.queue.tracks[idx])
-            if 0 <= idx + 1 < len(self.queue.tracks):
-                targets.append(self.queue.tracks[idx + 1])
-
-            for t in targets:
-                if t.local_path and Path(t.local_path).exists():
-                    continue
-                if t.status in {"downloading", "playing", "paused"}:
-                    continue
-
-                self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "downloading"})
-                try:
-                    out = self.downloader.download_mp3(t)
-                    self.ui_events.put({"type": "download_done", "track_id": t.track_id, "path": str(out)})
-                    self.ui_events.put({"type": "log", "msg": f"✅ downloaded: {out.name}"})
-                except Exception as e:
-                    self.ui_events.put({"type": "track_status", "track_id": t.track_id, "status": "failed", "error": str(e)})
-                    self.ui_events.put({"type": "log", "msg": f"❌ download failed: {t.title} — {e}"})
-
-    # -------------------- playback --------------------
-    def play_current(self, force: bool = False) -> None:
-        t = self.queue.current()
-        if not t:
-            return
-
-        if not self.download_mode_var.get():
-            webbrowser.open(t.url)
-            self._log(f"🌐 opened: {t.title}")
-            t.status = "played"
-            self.queue.save()
-            self.next_track(auto=True)
-            return
-
-        if not self.player.is_ready():
-            messagebox.showerror("Audio error", "pygame не найден/не инициализировался.\n\npip install pygame", parent=self)
-            return
-
-        if not t.local_path or not Path(t.local_path).exists():
-            if force:
-                self._log(f"⏳ waiting download: {t.title}")
-                self.status_var.set("Waiting download…")
-            t.status = "queued"
-            self.queue.save()
-            self._update_now_playing()
-            return
-
-        t.status = "playing"
-        self.queue.save()
-        self._update_now_playing()
-        self.status_var.set("Starting…")
-        self._last_play_start_ts = time.time()
-
-        try:
-            self.player.play(t.local_path, volume=float(self.volume_var.get()))
-            t.status = "playing"
-            self.queue.save()
-            self._update_now_playing()
-            self.status_var.set("Playing")
-            self._cleanup_temp_window()
-        except Exception as e:
-            t.status = "failed"
-            t.error = str(e)
-            self.queue.save()
-            self._log(f"❌ play error: {e}")
-            self.status_var.set("Play error")
-
-    def play_pause(self) -> None:
-        t = self.queue.current()
-        if not t:
-            return
-
-        if not self.download_mode_var.get():
-            self.play_current(force=True)
-            return
-
-        if not self.player.is_ready():
-            self.play_current(force=True)
-            return
-
-        if self.player.is_playing() and not self.player.is_paused():
-            self.player.pause()
-            t.status = "paused"
-            self._log("⏸ pause")
-        elif self.player.is_paused():
-            self.player.resume()
-            t.status = "playing"
-            self._log("⏯ resume")
-        else:
-            self.play_current(force=True)
-            return
-
-        self.queue.save()
-        self._update_now_playing()
-
-    def next_track(self, auto: bool = False) -> None:
-        cur = self.queue.current()
-        if not cur:
-            return
-
-        if cur.status in {"playing", "paused"}:
-            cur.status = "played" if auto else "skipped"
-        elif cur.status not in {"played", "skipped", "failed"}:
-            cur.status = "played" if auto else "skipped"
-
-        self.player.stop()
-
-        nid = self.queue.next_id()
-        if not nid:
-            self.queue.save()
-            self.status_var.set("End of queue")
-            self._log("ℹ end of queue")
-            self._cleanup_temp_window()
-            self._update_now_playing()
-            return
-
-        self.queue.set_current(nid)
-        self.queue.save()
-        self._save_config()
-        self.play_current(force=True)
-
-    def prev_track(self) -> None:
-        pid = self.queue.prev_id()
-        if not pid:
-            self._log("ℹ no previous")
-            return
-        self.player.stop()
-        self.queue.set_current(pid)
-        self.queue.save()
-        self._save_config()
-        self.play_current(force=True)
-
-    def skip_track(self) -> None:
-        cur = self.queue.current()
-        if not cur:
-            return
-        cur.status = "skipped"
-        self.queue.save()
-        self.player.stop()
-        self._log(f"⏩ skipped: {cur.title}")
-        self.next_track(auto=False)
-
-    def go_start(self) -> None:
-        if not self.queue.tracks:
-            return
-        self.player.stop()
-        self.queue.set_current(self.queue.tracks[0].track_id)
-        self.queue.save()
-        self._save_config()
-        self.play_current(force=True)
-
-    # -------------------- watchdog: auto next --------------------
-    def _watchdog(self) -> None:
-        try:
-            if self.pollers.is_running() and self.download_mode_var.get() and self.player.is_ready():
-                if not self.player.is_paused() and self.queue.current_track_id:
-                    if (time.time() - self._last_play_start_ts) < 1.0:
-                        return
-
-                    if not self.player.is_playing():
-                        cur = self.queue.current()
-                        if cur and cur.status == "playing":
-                            cur.status = "played"
-                            self.queue.save()
-                            self._cleanup_temp_window()
-                            self.next_track(auto=True)
-        finally:
-            self.after(450, self._watchdog)
-
-    # -------------------- cleanup --------------------
-    def _cleanup_temp_window(self) -> None:
-        idx = self.queue.index_of_current()
-        if idx < 0:
-            return
-
-        keep_paths: set[str] = set()
-        keep_ids = set()
-        if idx - 1 >= 0:
-            keep_ids.add(self.queue.tracks[idx - 1].track_id)
-        keep_ids.add(self.queue.tracks[idx].track_id)
-        if idx + 1 < len(self.queue.tracks):
-            keep_ids.add(self.queue.tracks[idx + 1].track_id)
-
-        for t in self.queue.tracks:
-            if t.track_id in keep_ids and t.local_path and Path(t.local_path).exists():
-                keep_paths.add(str(Path(t.local_path).resolve()))
-
-        from donation_media_hub.downloader import Downloader as _D  # local import to avoid cycles
-        _D.cleanup_keep(TEMP_DIR, keep_paths)
-
-        for t in self.queue.tracks:
-            if t.local_path and not Path(t.local_path).exists():
-                t.local_path = None
-        self.queue.save()
-
-    def clear_temp(self) -> None:
-        self.player.stop()
-        try:
-            if TEMP_DIR.exists():
-                shutil.rmtree(TEMP_DIR, ignore_errors=True)
-            TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось очистить temp: {e}", parent=self)
-            return
-
-        for t in self.queue.tracks:
-            t.local_path = None
-            if t.status in {"downloading", "playing", "paused"}:
-                t.status = "queued"
-
-        self.queue.save()
-        self._log("🧹 temp cleared")
-        self._update_now_playing()
-
-    def clear_queue(self) -> None:
-        self.player.stop()
-        self.queue.clear()
-        self.queue.save()
-        self.queue.set_current(None)
-        self._save_config()
-        self._log("🗑 queue cleared")
-        self.status_var.set("Queue cleared")
-        self._update_now_playing()
+    def _open_selected_link(self) -> None:
+        idx = self.table.currentIndex()
+        t = self.model.track_at(idx.row())
+        if t:
+            self.controller.set_current_by_id(t.track_id)
+            self.controller.open_current_link()
 
     # -------------------- help --------------------
     def _help_da(self) -> None:
-        show_help(
+        HelpDialog(
             self,
             "DonationAlerts — токен",
             "1) Открой страницу\n2) Найди «Секретный токен»\n3) Скопируй и вставь",
             "https://www.donationalerts.com/dashboard/general-settings/account",
-        )
+        ).exec()
 
     def _help_dx(self) -> None:
-        show_help(
+        HelpDialog(
             self,
             "DonateX — токен",
             "1) Открой страницу\n2) «Последние донаты»\n3) В адресной строке token=XXXX\n4) Скопируй XXXX",
             "https://donatex.gg/streamer/dashboard",
-        )
+        ).exec()
 
     # -------------------- close --------------------
-    def on_close(self) -> None:
-        if self._closing:
-            return
-        self._closing = True
-
-        self.pollers.stop()
-
+    def closeEvent(self, event) -> None:
         try:
             has_files = TEMP_DIR.exists() and any(TEMP_DIR.glob("*.mp3"))
             if has_files:
-                yes = messagebox.askyesno(
+                yes = ask_yes_no(
+                    self,
                     "Очистка временных файлов",
                     "Очистить загруженные треки (mp3) из temp папки?",
-                    parent=self,
                 )
                 if yes:
+                    import shutil
+
                     shutil.rmtree(TEMP_DIR, ignore_errors=True)
                     TEMP_DIR.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
 
-        self._save_states()
-        self.queue.save()
-        self._save_config()
+        try:
+            self._save_config()
+        except Exception:
+            pass
 
-        self.player.shutdown()
-        self.destroy()
+        try:
+            self.controller.close()
+        except Exception:
+            pass
+
+        event.accept()
+
+
+def run_qt(
+    queue: QueueManager, config_file: Path, state_da_file: Path, state_dx_file: Path
+) -> None:
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = MainWindow(queue, config_file, state_da_file, state_dx_file)
+    win.show()
+    sys.exit(app.exec())
