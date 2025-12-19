@@ -16,14 +16,12 @@ with automatic **YouTube → MP3** download and playback.
   - DonationAlerts (YouTube media)
   - DonateX (musicLink)
 - ⬇️ YouTube → MP3 auto-download (via API)
-- 🌑 Dark theme (native ttk, no external UI libs)
-- 📱 Vertical, compact player layout
 - 🧠 Smart queue trimming (keeps current / prev / next)
 - 💾 Persistent state:
   - queue
   - tokens
   - last processed donations
-- 🖥️ Builds for **Windows (.exe)** and **macOS (.app)**
+- 🖥️ Builds for **Windows (.exe)**
 
 ---
 
@@ -167,11 +165,7 @@ pyinstaller donation_media_hub.spec
 
 | OS      | Result                      |
 | ------- | --------------------------- |
-| macOS   | `dist/DonationMediaHub.app` |
 | Windows | `dist/DonationMediaHub.exe` |
-
-> ⚠️ Cross-compilation is NOT supported
-> Build on macOS for macOS, on Windows for Windows.
 
 ---
 
@@ -179,7 +173,6 @@ pyinstaller donation_media_hub.spec
 
 This repo includes CI that automatically builds:
 
-* ✅ macOS `.app`
 * ✅ Windows `.exe`
 
 ### Trigger
