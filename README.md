@@ -3,6 +3,8 @@
 Desktop player for donation music from **DonationAlerts** and **DonateX**  
 with automatic **YouTube → MP3** download and playback.
 
+![App screenshot](assets/app.png)
+
 > Clean architecture · Dark UI · Vertical player · Windows & macOS
 
 ---
