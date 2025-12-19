@@ -134,39 +134,6 @@ pyinstaller donation_media_hub.spec
 | ------- | --------------------------- |
 | Windows | `dist/DonationMediaHub.exe` |
 
----
-
-## 🤖 CI / GitHub Actions
-
-This repo includes CI that automatically builds:
-
-* ✅ Windows `.exe`
-
-### Trigger
-
-Push a tag:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Artifacts will appear in **GitHub Actions**.
-
----
-
-## 🔐 Files NOT committed
-
-These are user-specific and ignored by `.gitignore`:
-
-* `config.json`
-* `queue.json`
-* `state_donationalerts.json`
-* `state_donatex.json`
-* downloaded `.mp3`
-
----
-
 ## 🧠 Architecture Principles
 
 * UI ≠ Business logic
