@@ -160,7 +160,7 @@ MIT (or choose your own)
 
 ---
 
-## ❤️ Author
+## ❤️ Fatyzzz
 
 Built with care for streamers.
 
