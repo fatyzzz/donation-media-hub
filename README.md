@@ -37,36 +37,28 @@ with automatic **YouTube → MP3** download and playback.
 - Tokens & settings panel
 - Log panel (compact)
 
----
+## 🔑 Tokens
 
-## 📦 Project Structure
+### DonationAlerts
 
-```text
-donation-media-hub/
-├─ donation_media_hub/
-│  ├─ app.py              # App entry (Tk)
-│  ├─ config.py           # Constants
-│  ├─ paths.py            # Runtime paths (PyInstaller-safe)
-│  ├─ models.py           # Track model
-│  ├─ queue_manager.py    # Queue logic
-│  ├─ downloader.py       # MP3 downloader
-│  ├─ playback.py         # pygame audio wrapper
-│  ├─ pollers.py          # DA / DX polling threads
-│  ├─ storage.py          # JSON load/save
-│  ├─ services/           # External APIs
-│  └─ ui/                 # UI (theme, dialogs, window)
-│
-├─ assets/
-│  └─ icon.ico
-│
-├─ .github/workflows/
-│  └─ build.yml           # CI builds (macOS + Windows)
-│
-├─ donation_media_hub.spec
-├─ run.py
-├─ requirements.txt
-└─ README.md
-````
+1. Open:
+   [https://www.donationalerts.com/dashboard/general-settings/account](https://www.donationalerts.com/dashboard/general-settings/account)
+2. Copy **Secret token**
+3. Paste into **DA** field
+
+### DonateX
+
+1. Open:
+   [https://donatex.gg/streamer/dashboard](https://donatex.gg/streamer/dashboard)
+2. Open donations page
+3. In URL find:
+
+   ```
+   token=XXXX
+   ```
+4. Copy `XXXX` into **DX** field
+
+> You can use **only one** service — the other may stay empty.
 
 ---
 
@@ -91,31 +83,6 @@ pip install -r requirements.txt
 ```bash
 python run.py
 ```
-
----
-
-## 🔑 Tokens
-
-### DonationAlerts
-
-1. Open:
-   [https://www.donationalerts.com/dashboard/general-settings/account](https://www.donationalerts.com/dashboard/general-settings/account)
-2. Copy **Secret token**
-3. Paste into **DA** field
-
-### DonateX
-
-1. Open:
-   [https://donatex.gg/streamer/dashboard](https://donatex.gg/streamer/dashboard)
-2. Open donations page
-3. In URL find:
-
-   ```
-   token=XXXX
-   ```
-4. Copy `XXXX` into **DX** field
-
-> You can use **only one** service — the other may stay empty.
 
 ---
 
